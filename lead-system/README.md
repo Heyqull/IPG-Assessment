@@ -1,31 +1,27 @@
 # Lead Management System
 
-Lead intake API + a small dashboard to manage them. Built for the IPG assessment.
-
 Stack: Next.js 15 (App Router), Supabase (Postgres + Realtime), Tailwind, shadcn/ui, Zod for payload validation.
 
 ## Setup
 
-You'll need Node 20+ and a Supabase project (free tier is fine).
+You'll need Node 20+, ive also committed the env as well -- env.local to ease the setup, and theres not really any secret to keep
 
 ```bash
 git clone <repo>
 cd lead-system
 npm install
-cp .env.example .env.local
 ```
 
-Fill in `.env.local` — you need the Supabase URL, anon key, and service role key (all under Project Settings → API in the Supabase dashboard), plus an `INCOMING_API_TOKEN` which is just any string you want callers to send as the bearer token.
+I already committed .env.local as well to point to supabase to ease the setup process and theres not really a secret to keep
 
-For the database, paste `supabase/migrations/0001_init.sql` into the Supabase SQL editor and run it. Then run `supabase/seed.sql` to get a few agents to assign leads to.
-
+make sure in /lead-system
 ```bash
 npm run dev
 ```
 
 Hit http://localhost:3000 and it'll redirect to `/leads`.
 
-## API
+## API endpoint lists
 
 | Method | Path | Auth |
 |---|---|---|
@@ -37,11 +33,11 @@ Hit http://localhost:3000 and it'll redirect to `/leads`.
 | GET | `/api/agents` | — |
 | GET | `/api/leads/summary` | — |
 
-Only the intake endpoint is auth'd. The rest are open because the dashboard is assumed to be on an internal network — in production you'd put Supabase Auth (or your own middleware) in front of them.
+Only the intake endpoint is auth'd with Bearer. 
 
 ## Trying the intake endpoint
 
-Happy path:
+I tested on both bash and postman for the intake POST
 
 ```bash
 curl -X POST http://localhost:3000/api/leads/incoming \
@@ -59,34 +55,28 @@ curl -X POST http://localhost:3000/api/leads/incoming \
   }'
 ```
 
-Returns 201 with the inserted lead. Send the same thing twice and the second one comes back as 409 with `field` telling you whether `external_id`, `phone`, or `email` was the collision. Drop the bearer header and you get 401. Send malformed fields and you get 400 with the Zod error tree.
-
-There's also a PowerShell seeder at `scripts/seed-leads.ps1` that fires 10 fake leads at the running dev server.
+Returns 201 with the inserted lead. Send the same thing twice and the second one comes back as 409 with `field` telling you whether `external_id`, `phone`, or `email` was the duplicated value. Drop the bearer header and you get 401. Send malformed fields and you get 400 with the Zod error tree.
 
 ## Realtime
 
 Open `/leads` in two tabs (or just one) and post a new lead via curl. The table updates without a refresh — `leads` is in the `supabase_realtime` publication and the page subscribes to `postgres_changes`.
 
-## Docs
+## DB SCHEME / ERD
 
 - [Flowchart](docs/flowchart.md) — request lifecycle
+- [Flowchart](docs/flowchart.png) — request lifecycle
 - [ERD](docs/erd.md) — table relationships
+- [ERD](docs/erd.png) — table relationships
 
 ## Architecture
 
-Everything lives in one Next.js app. The App Router route handlers under `app/api/` act as the backend — no separate server. The UI pages sit alongside them and talk to those same endpoints via `fetch`.
-
-Two Supabase clients are in play. The browser gets the anon key and goes through RLS. Server-side route handlers use the service role key, which bypasses RLS — that's intentional so write operations don't get blocked.
-
 Incoming lead flow: external caller POSTs to `/api/leads/incoming` → raw payload logged immediately (so there's always an audit trail) → Zod validates the shape → three sequential DB checks for `external_id`, `phone`, `email` duplicates → lead inserted → Postgres trigger fires and writes a row to `lead_status_history` → Supabase Realtime broadcasts the change → browser receives it and refreshes the table without a page reload.
-
-The whole thing is a monolith because that's appropriate for the scope. If the intake endpoint needed to handle serious volume, it'd make sense to move it to a Supabase Edge Function and keep the rest as-is.
 
 ## Assumptions & decisions
 
-A few things worth calling out:
+Few reasonings behind the designs:
 
-**Separate `external_id` from internal `id`.** The sender's `leadId` could be anything — sequential, predictable, reused across senders. Keeping our own UUID PK means we never expose theirs and we don't break if they reset their counter.
+**Separate `external_id` from internal `id`.** The sender's `leadId` could be anything — sequential, predictable, reused across senders. Uses UUID to never have collision issue in the future, much practical
 
 **Log the raw payload first, validate second.** `webhook_logs` gets the row with `status=pending` before Zod runs, so even garbage requests leave a trail. Status flips to `invalid` / `duplicate` / `error` / `ok` based on what happens next. Useful for debugging when a sender claims they sent something and you can't find it.
 
@@ -98,27 +88,51 @@ A few things worth calling out:
 
 **No retry on the intake endpoint.** If insert fails we return 500 and log the error — the caller is expected to retry. Adding a queue felt like overkill for the assessment.
 
-## Layout
+**UI Design decisions** Since this is a property--field management system, the design shall be somewhat modern, simple, and clean since user will be looking at lots of texts and data clean and simple design will be much pleasing to the eye.
 
-```
-app/
-  api/
-    leads/
-      incoming/route.ts   # the webhook
-      route.ts            # list with search/filter
-      [id]/route.ts       # detail / patch
-      [id]/notes/route.ts
-      summary/route.ts    # dashboard numbers
-    agents/route.ts
-  leads/
-    page.tsx              # table + realtime
-    [id]/page.tsx         # detail / status / notes / history
-components/leads/         # StatusBadge, SummaryStrip
-lib/
-  schemas/lead.ts         # Zod
-  supabase/               # browser + server clients
-supabase/
-  migrations/0001_init.sql
-  seed.sql
-docs/
-```
+For dashboard i also kept the typical important stuff they would usually seek for on a management system and as for leads system, i chose the summary dashboard to display total leads, total records by status, and recent leads with a timestamp, i believe these are some of the things they care about
+
+I also added few animations and hover effects, not much, but just enough so that the page doenst feel dead and too static
+
+Lastly, color pallettes were also not just chosen randomly, i chose a pallete that looked soft, and doesnt give eye constrait since user will be doing alot of reading on the page
+
+## CHECKLIST 
+## Assessment Checklist
+
+### 1. Incoming Lead API
+- [x] `POST /api/leads/incoming` accepts JSON — `app/api/leads/incoming/route.ts`
+- [x] Payload validation + clear response — Zod schema in `lib/schemas/lead.ts`, returns 400 with field errors
+- [x] Lead stored + raw payload logged — every request inserts into `webhook_logs` before validation
+- [x] Graceful handling of invalid/incomplete data — bad JSON → 400, schema fail → 400, dup → 409, insert fail → 500
+
+### 2. Database (Supabase)
+- [x] Lead info → `leads` table
+- [x] Assigned agent info → `agents` table + `leads.assigned_agent_id` FK
+- [x] Notes → `lead_notes`; status history → `lead_status_history` (auto-populated by `record_status_change()` trigger)
+- [x] Raw webhook logs → `webhook_logs` (jsonb payload + status)
+- [x] Schema in `supabase/migrations/0001_init.sql`, ERD in `docs/erd.md`
+
+### 3. Lead Management UI
+- [x] List leads — `/leads` (`app/leads/page.tsx`)
+- [x] View lead details — `/leads/[id]`
+- [x] Update lead status — Manage card, status dropdown
+- [x] Assign agent — Manage card, agent dropdown
+- [x] Add notes — Notes card with textarea
+
+### 4. Documentation
+- [x] Flowchart — `docs/flowchart.md`
+- [x] DB schema / ERD — `supabase/migrations/0001_init.sql` + `docs/erd.md`
+- [x] API endpoint list — README §API
+- [x] Setup instructions — README §Setup
+- [x] Assumptions / design decisions — README §Assumptions & decisions
+- [x] Source code — repo
+- [x] README — this file
+- [x] Architecture explanation — README §Architecture
+
+### Bonus
+- [x] Duplicate detection (phone/email/external_id) — 409 with `field` indicating which collided
+- [x] Token validation on intake — `Authorization: Bearer $INCOMING_API_TOKEN`, 401 on miss
+- [x] Error handling — every branch logs to `webhook_logs` (status: pending → ok/invalid/duplicate/error)
+- [x] Search and filter — `/api/leads?q=&status=`, wired into UI search bar + status dropdown
+- [x] Dashboard summary — total + pie by status + recent leads (`SummaryStrip.tsx`)
+- [x] Realtime updates — Supabase `postgres_changes` subscription on `/leads`
